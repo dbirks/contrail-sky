@@ -653,3 +653,316 @@ body.is-globe .walk {
     padding: 5px 10px;
   }
 }
+
+/* ==== mobile compact controls (pi-controls) ==== */
+/* Phones: the sky and the low contrails must stay visible.
+   - the walk pad moves to the BOTTOM-RIGHT, just above the collapsed panel pill, with the compass
+     folded into its free corner cell and the "standing still" badge hidden
+   - the altitude rail becomes a slim 40px strip floating in the upper-right sky, its label chips
+     only while a finger is on it (see .show-marks, wired in main.ts)
+   - one compact top-bar row and a small hint bubble under it
+   Everything below lives in the small-screen media queries, so desktop is untouched. These rules
+   come after the older `@media (max-width: 640px)` block, so they win on equal specificity. */
+@media (max-width: 640px), (max-height: 500px) {
+  /* dvh: Safari's collapsing bottom bar must not push anything off screen */
+  html,
+  body {
+    height: 100dvh;
+  }
+  /* the shared vertical geometry, in one place (namespaced so other blocks can merge cleanly):
+     --mc-pad-bottom = where the walk pad sits: on top of the collapsed panel pill
+     --mc-top-edge   = the sky below the compact top bar / hint bubble
+     --mc-reserve-b  = pad height + the walking badge, kept clear under the altitude rail
+     --mc-rail-h     = the rail itself: never longer than the free sky between the two */
+  :root {
+    --mc-inset-b: max(8px, env(safe-area-inset-bottom));
+    --mc-top-edge: calc(max(8px, env(safe-area-inset-top)) + 54px);
+    --mc-pad-bottom: min(calc(var(--panel-h, 60px) + var(--mc-inset-b) + 8px), 52dvh);
+    --mc-chrome: 56px; /* the ↑, the caption and the padding around the rail */
+    --mc-reserve-b: min(
+      calc(var(--panel-h, 60px) + var(--mc-inset-b) + 150px),
+      calc(var(--mc-pad-bottom) + 140px)
+    );
+    --mc-rail-h: max(
+      64px,
+      min(38dvh, calc(100dvh - var(--mc-top-edge) - var(--mc-reserve-b) - var(--mc-chrome)))
+    );
+  }
+
+  /* ── top bar: one slim row ── */
+  .topbar {
+    top: max(8px, env(safe-area-inset-top));
+    left: max(8px, env(safe-area-inset-left));
+    right: max(8px, env(safe-area-inset-right));
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+  }
+  .brand {
+    padding: 5px 9px;
+    border-radius: 13px;
+  }
+  .brand h1 {
+    font-size: 16px;
+    letter-spacing: 0;
+  }
+  .brand p {
+    display: none; /* no room for the subtitle over the sky */
+  }
+  .modes {
+    padding: 3px;
+    gap: 2px;
+  }
+  .modes button {
+    height: 36px;
+    min-width: 44px; /* still an easy thumb target */
+    padding: 0 9px;
+    font-size: 13px;
+    line-height: 36px;
+  }
+
+  /* ── hint bubble: small, tucked under the top bar, stopping short of the altitude rail ── */
+  .hint {
+    top: calc(max(8px, env(safe-area-inset-top)) + 54px);
+    left: max(8px, env(safe-area-inset-left));
+    right: calc(54px + env(safe-area-inset-right));
+    transform: none;
+    max-width: none;
+    padding: 4px 9px;
+    font-size: 11px;
+    line-height: 1.25;
+    border-radius: 12px;
+    white-space: normal;
+    text-align: center;
+  }
+
+  /* ── altitude rail: slim, short, centred in the sky between the top bar and the walk pad ── */
+  .altitude {
+    /* centred in the free band of sky, but never pushed up over the top bar when the band is tight */
+    top: max(
+      calc((var(--mc-top-edge) + 100dvh - var(--mc-reserve-b)) / 2),
+      calc(var(--mc-top-edge) + (var(--mc-rail-h) + var(--mc-chrome)) / 2)
+    );
+    bottom: auto;
+    right: max(8px, env(safe-area-inset-right));
+    transform: translateY(-50%);
+    width: 40px;
+    padding: 5px 1px;
+    gap: 3px;
+    border-radius: 14px;
+    background: rgba(10, 18, 38, 0.48);
+    border-color: rgba(255, 255, 255, 0.12);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+  .altitude-title {
+    font-size: 0; /* "How high am I?" is too long here: just a small up arrow */
+    line-height: 1;
+    height: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .altitude-title::before {
+    content: "↑";
+    font-size: 13px;
+    font-weight: 800;
+    color: var(--sun);
+  }
+  .altitude-value {
+    font-size: 9px;
+    line-height: 1.2;
+    min-height: 0;
+    font-weight: 700;
+    overflow-wrap: normal; /* "On the / ground", never "groun / d" */
+    word-break: normal;
+    hyphens: none;
+  }
+  .altitude-rail {
+    height: var(--mc-rail-h);
+    width: 34px;
+  }
+  /* own the thumb so it is always >= 28px and the whole 34px column is drag surface */
+  #alt-slider {
+    appearance: none;
+    -webkit-appearance: none;
+    width: var(--mc-rail-h);
+    height: 34px;
+    margin: 0;
+    background: transparent;
+  }
+  #alt-slider::-webkit-slider-runnable-track {
+    height: 5px;
+    border-radius: 999px;
+    background: linear-gradient(
+      to right,
+      var(--sun) 0 var(--alt-pct, 0%),
+      rgba(255, 255, 255, 0.3) var(--alt-pct, 0%) 100%
+    );
+  }
+  #alt-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 30px;
+    height: 30px;
+    margin-top: -12.5px;
+    border-radius: 50%;
+    background: var(--sun);
+    border: 2px solid rgba(10, 18, 38, 0.75);
+    box-shadow: 0 1px 5px rgba(0, 0, 0, 0.55);
+  }
+  #alt-slider::-moz-range-track {
+    height: 5px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.3);
+  }
+  #alt-slider::-moz-range-progress {
+    height: 5px;
+    border-radius: 999px;
+    background: var(--sun);
+  }
+  #alt-slider::-moz-range-thumb {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: var(--sun);
+    border: 2px solid rgba(10, 18, 38, 0.75);
+  }
+  #alt-slider:active::-webkit-slider-thumb,
+  #alt-slider:focus-visible::-webkit-slider-thumb {
+    border-color: var(--ink);
+  }
+  /* label chips stay out of the sky until a finger is on the rail (main.ts adds .show-marks) */
+  .alt-marks,
+  .alt-marks button {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s;
+  }
+  .altitude.show-marks {
+    border-color: var(--sun);
+  }
+  .altitude.show-marks .alt-marks,
+  .altitude.show-marks .alt-marks button {
+    opacity: 1;
+  }
+  .altitude.show-marks .alt-marks button {
+    pointer-events: auto;
+    display: block; /* the older phone rule hides the middle chips; while dragging, show them all */
+  }
+  .alt-marks button {
+    right: calc(100% + 8px);
+    font-size: 10px;
+    padding: 4px 8px;
+  }
+
+  /* ── walk pad: bottom-right, right above the collapsed panel pill ──
+     (class selectors only: an ID here would out-specify `body.is-globe .walk` and leave the pad
+      floating over the globe) */
+  .walk {
+    --btn: 44px;
+    left: auto;
+    right: max(10px, env(safe-area-inset-right));
+    top: auto;
+    /* sit right on top of the collapsed panel pill (52dvh cap: only bites while #panel is a big box) */
+    bottom: var(--mc-pad-bottom);
+    align-items: stretch;
+    display: grid; /* the pad's own grid, so the compass can move into a free cell */
+    grid-template-columns: repeat(3, var(--btn));
+    grid-template-rows: auto var(--btn) var(--btn);
+    gap: 5px;
+  }
+  .walk-info,
+  .dpad {
+    display: contents; /* children join the pad grid above */
+  }
+  .compass {
+    grid-area: 2 / 1 / 3 / 2; /* the empty top-left cell of the T */
+    justify-self: center;
+    align-self: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border-radius: 50%;
+    background: rgba(10, 18, 38, 0.5);
+    pointer-events: none; /* it is a read-out: let a finger there drag the sky instead */
+  }
+  .compass-text {
+    display: none; /* no "Facing N": the dial says it */
+  }
+  .compass-dial {
+    width: 38px;
+    height: 38px;
+  }
+  .compass-n,
+  .compass-p {
+    font-size: 21px; /* grows back to a readable ~8px on a 38px dial */
+  }
+  .speed-pill {
+    grid-area: 1 / 1 / 2 / 4;
+    justify-self: end;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 8px;
+    background: rgba(10, 18, 38, 0.55);
+  }
+  .speed-pill.idle {
+    display: none; /* "standing still" is not worth covering the sky for */
+  }
+  .dpad-btn {
+    min-width: 44px;
+    min-height: 44px;
+    font-size: 19px;
+    border-radius: 13px;
+    background: rgba(10, 18, 38, 0.45); /* translucent glass: the sky shows through */
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+  .dpad-btn.fwd {
+    grid-area: 2 / 2 / 3 / 3;
+  }
+  .dpad-btn.left {
+    grid-area: 3 / 1 / 4 / 2;
+  }
+  .dpad-btn.back {
+    grid-area: 3 / 2 / 4 / 3;
+  }
+  .dpad-btn.right {
+    grid-area: 3 / 3 / 4 / 4;
+  }
+  /* still no walk pad once you are airborne (re-asserted after the rules above) */
+  body.is-globe .walk {
+    display: none;
+  }
+}
+
+/* phones lying on their side: everything squeezes into the strips left and right of the sky */
+@media (max-height: 500px) {
+  :root {
+    /* lying down there is very little sky above the horizon: the pad is shorter and the rail loses
+       its caption, so the rail can stretch from just under the top bar (the hint bubble stops short
+       of the rail's 40px column) down to the top of the pad, badge included */
+    --mc-inset-b: max(6px, env(safe-area-inset-bottom));
+    --mc-pad-bottom: min(calc(var(--panel-h, 60px) + var(--mc-inset-b) + 6px), 50dvh);
+    --mc-chrome: 20px;
+    --mc-reserve-b: min(
+      calc(var(--panel-h, 60px) + var(--mc-inset-b) + 132px),
+      calc(var(--mc-pad-bottom) + 128px)
+    );
+    --mc-rail-h: max(
+      56px,
+      min(34dvh, calc(100dvh - var(--mc-top-edge) - var(--mc-reserve-b) - var(--mc-chrome)))
+    );
+  }
+  .altitude-value {
+    display: none; /* the panel pill already says how high you are */
+  }
+  .hint {
+    right: calc(54px + env(safe-area-inset-right)); /* stop short of the rail */
+    font-size: 10.5px;
+  }
+  .walk {
+    gap: 4px;
+  }
+}
