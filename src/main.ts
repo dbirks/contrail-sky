@@ -851,6 +851,43 @@ for (const mk of marks) {
   $("alt-marks").appendChild(b);
 }
 
+/* Phones have no room for the "Plane height / Edge of space / …" chips next to the rail, so they
+ * stay invisible and only show while a finger is on the rail (see .show-marks in styles.css). */
+const altWrap = document.querySelector<HTMLElement>(".altitude");
+let marksTimer = 0;
+let railTouched = false; // a finger is on the rail: keep the labels up until it lifts
+let lastAltPct = "";
+function showAltMarks() {
+  if (!altWrap) return;
+  window.clearTimeout(marksTimer);
+  altWrap.classList.add("show-marks");
+}
+function hideAltMarksSoon() {
+  if (!altWrap) return;
+  window.clearTimeout(marksTimer);
+  marksTimer = window.setTimeout(() => altWrap.classList.remove("show-marks"), 1500);
+}
+for (const ev of ["pointerdown", "touchstart"])
+  altWrap?.addEventListener(
+    ev,
+    () => {
+      railTouched = true;
+      showAltMarks();
+    },
+    { passive: true },
+  );
+for (const ev of ["pointerup", "pointercancel", "touchend", "touchcancel"])
+  window.addEventListener(
+    ev,
+    () => {
+      railTouched = false;
+      hideAltMarksSoon();
+    },
+    { passive: true },
+  );
+altWrap?.addEventListener("focusin", showAltMarks); // keyboard: show them while the rail has focus
+altWrap?.addEventListener("focusout", hideAltMarksSoon);
+
 let altTarget = 0; // where the user wants to be (slider space)
 let altCurrent = 0; // where the camera actually is, eased toward altTarget every frame
 let aimOnLanding = false; // zoom/fly all the way down → look back at the plane once we're standing
@@ -881,7 +918,11 @@ function applyT(t: number) {
     aimOnLanding = false;
   }
 }
-altSlider.addEventListener("input", () => setAltTarget(Number(altSlider.value) / 1000));
+altSlider.addEventListener("input", () => {
+  setAltTarget(Number(altSlider.value) / 1000);
+  showAltMarks(); // dragging or arrow-keying also asks for the labels
+  if (!railTouched) hideAltMarksSoon(); // keyboard: they fade ~1.5 s after the last move
+});
 
 function aimAtPlane(instant = true) {
   const f = flights[state.selected];
@@ -1445,6 +1486,12 @@ function frame(now: number) {
   }
   // keep the thumb in step with the camera, but never fight a finger that is on it
   if (!sliderHeld && document.activeElement !== altSlider) altSlider.value = String(Math.round(altCurrent * 1000));
+  // the phone rail draws its own filled track from --alt-pct (styles.css); keep it glued to the thumb
+  const altPct = `${Math.round(Number(altSlider.value) / 10)}%`;
+  if (altPct !== lastAltPct) {
+    lastAltPct = altPct;
+    altWrap?.style.setProperty("--alt-pct", altPct);
+  }
 
   // camera
   const w = canvas.clientWidth;
