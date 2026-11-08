@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b1530" />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <title>Contrail Sky</title>
+  </head>
+  <body>
+    <canvas id="scene"></canvas>
+    <div id="labels" aria-hidden="true"></div>
+
+    <header class="topbar">
+      <div class="brand">
+        <h1>Contrail Sky</h1>
+        <p>Is that a rocket? Or a plane way up high?</p>
+      </div>
+      <div class="modes" role="tablist" aria-label="View">
+        <button id="mode-ground" role="tab" aria-selected="true">🧍 On the ground</button>
+        <button id="mode-globe" role="tab" aria-selected="false">🌍 Globe</button>
+      </div>
+    </header>
+
+    <aside class="altitude" aria-label="How high am I?">
+      <span class="altitude-title">How high<br />am I?</span>
+      <div class="altitude-rail">
+        <input id="alt-slider" type="range" min="0" max="1000" step="1" value="0" aria-label="How high am I?" />
+        <div id="alt-marks" class="alt-marks"></div>
+      </div>
+      <span id="alt-value" class="altitude-value">On the ground</span>
+    </aside>
+
+    <section class="panel" id="panel">
+      <button class="panel-toggle" id="panel-toggle" aria-label="Hide or show the panel">▾</button>
+      <div class="readout">
+        <svg class="gauge" viewBox="0 0 100 60" aria-hidden="true">
+          <path d="M8 52 A44 44 0 0 1 92 52" class="gauge-arc" />
+          <line x1="2" y1="52" x2="98" y2="52" class="gauge-horizon" />
+          <g id="gauge-needle" transform="rotate(0 50 52)">
+            <line x1="50" y1="52" x2="94" y2="52" class="gauge-needle" />
+            <text x="88" y="48" class="gauge-plane">✈</text>
+          </g>
+          <circle cx="50" cy="52" r="3.5" class="gauge-you" />
+        </svg>
+        <div class="readout-text">
+          <div id="readout-angle" class="readout-angle">—</div>
+          <div id="readout-facts" class="readout-facts">—</div>
+          <div id="readout-sentence" class="readout-sentence">—</div>
+        </div>
+      </div>
+      <div class="where">
+        <label for="east-slider" class="where-label">
+          Where are you standing? <span id="where-value">Indianapolis</span>
+        </label>
+        <input id="east-slider" type="range" min="0" max="300" step="1" value="0" />
+        <div class="where-scale"><span>Home</span><span>150 mi east</span><span>300 mi east</span></div>
+        <div class="buttons">
+          <button id="go-home">🏙️ Home</button>
+          <button id="go-under">⬆️ 150 miles east</button>
+          <button id="find-plane">🔎 Find the plane</button>
+          <button id="see-here" class="globe-only">👀 See what you'd see from here</button>
+        </div>
+        <div class="options">
+          <label><input type="checkbox" id="opt-follow" /> Follow the plane</label>
+          <label class="globe-only"><input type="checkbox" id="opt-stretch" /> Stretch heights ×5</label>
+          <label><input type="checkbox" id="opt-labels" checked /> Labels</label>
+          <span class="speed" role="group" aria-label="Speed">
+            <button data-speed="1">1×</button><button data-speed="10" class="on">10×</button><button data-speed="60">60×</button>
+          </span>
+        </div>
+      </div>
+    </section>
+
+    <div id="hint" class="hint">Drag to look around · pinch or scroll to zoom</div>
+    <div id="fade" class="fade"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
