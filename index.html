@@ -72,6 +72,31 @@
       </div>
     </section>
 
+    <div class="walk" id="walk-ui" aria-label="Walking around">
+      <div class="walk-info">
+        <div class="compass" title="Which way you are facing">
+          <svg viewBox="-50 -50 100 100" class="compass-dial" aria-hidden="true">
+            <circle class="compass-ring" cx="0" cy="0" r="37" />
+            <g id="compass-card">
+              <text class="compass-n" x="0" y="-27">N</text>
+              <text class="compass-p" x="27" y="0">E</text>
+              <text class="compass-p" x="0" y="27">S</text>
+              <text class="compass-p" x="-27" y="0">W</text>
+            </g>
+            <polygon class="compass-eye" points="0,-39 -7,-47 7,-47" />
+          </svg>
+          <span class="compass-text" id="compass-text">Facing N</span>
+        </div>
+        <div class="speed-pill idle" id="walk-speed">🧍 standing still</div>
+      </div>
+      <div class="dpad" role="group" aria-label="Walk around: forward, back, turn left, turn right">
+        <button class="dpad-btn fwd" id="walk-fwd" aria-label="Walk forward">▲</button>
+        <button class="dpad-btn left" id="walk-left" aria-label="Turn left">◀</button>
+        <button class="dpad-btn back" id="walk-back" aria-label="Walk backward">▼</button>
+        <button class="dpad-btn right" id="walk-right" aria-label="Turn right">▶</button>
+      </div>
+    </div>
+
     <div id="hint" class="hint">Drag to look around · pinch or scroll to zoom</div>
     <div id="fade" class="fade"></div>
     <script type="module" src="/src/main.ts"></script>

@@ -9,10 +9,10 @@ import {
   fmtKm,
   fmtMi,
   frameAt,
+  KM_PER_MI,
   latLonFromDir,
   offsetFromDir,
   pointAt,
-  pointNear,
   rng,
   surfaceDistance,
   type Frame,
@@ -74,6 +74,18 @@ const state = {
   speed: 10,
   selected: 0,
 };
+
+// ───────────────────────────── walking around ─────────────────────────────
+type Pad = "fwd" | "back" | "left" | "right";
+const WALK_MIN = 0.5; // km/s when you first press
+const WALK_MAX = 30; // km/s after ~5 s of holding (150 mi takes ~10-20 s)
+const WALK_ACCEL = (WALK_MAX - WALK_MIN) / 5; // km/s per second of holding
+const TURN_RATE = 70; // deg/s
+const WALK_LIMIT = 1500; // km from home you may wander
+const walk = { v: 0 }; // current speed, km/s (magnitude; direction from the buttons)
+const padHeld: Record<Pad, boolean> = { fwd: false, back: false, left: false, right: false };
+const keyHeld: Record<Pad, boolean> = { fwd: false, back: false, left: false, right: false };
+const held = (d: Pad) => padHeld[d] || keyHeld[d];
 
 // ───────────────────────────── Earth ─────────────────────────────
 const earthMat = new THREE.MeshBasicMaterial({ color: 0x4d7a5a });
@@ -276,8 +288,8 @@ const contrailMat = makeContrailMaterial();
 
 /** Thinnest a trail is ever allowed to look on screen, in pixels. A real contrail is far
  *  under a pixel wide from the ground, so without a floor it simply disappears. */
-const MIN_PX_CORE = { ground: 4.5, globe: 3 };
-const MIN_PX_HAZE = { ground: 14, globe: 6 };
+const MIN_PX_CORE = { ground: 7, globe: 3 };
+const MIN_PX_HAZE = { ground: 26, globe: 6 };
 
 class Ribbon {
   readonly mesh: THREE.Mesh;
@@ -490,9 +502,9 @@ const smooth = (a: number, b: number, x: number) => {
 // roughly that curve (a little exaggerated) so the trail visibly fattens behind the plane.
 const SPREAD_TAU = 520; // seconds
 const CORE_W0 = 0.14; // km, right behind the engines
-const CORE_W1 = 1.3; // km, ~20 min later
+const CORE_W1 = 2.0; // km, ~20 min later
 const HAZE_W0 = 0.22;
-const HAZE_W1 = 3.6;
+const HAZE_W1 = 5.0;
 
 function updateContrails(camPos: THREE.Vector3, pxKm: number, altScale: number) {
   const tmpA = new THREE.Vector3();
@@ -520,11 +532,11 @@ function updateContrails(camPos: THREE.Vector3, pxKm: number, altScale: number) 
       const ends = smooth(0, 3, age) * smooth(0, 12, s) * smooth(MAX_AGE_S, MAX_AGE_S * 0.75, age);
       // bright, crisp, still-narrow young trail
       coreBand.w[count] = (CORE_W0 + (CORE_W1 - CORE_W0) * spread) * lumps;
-      coreBand.a[count] = ends * puff * Math.exp(-age / 900);
+      coreBand.a[count] = ends * puff * Math.exp(-age / 1300);
       coreBand.s[count] = 0.04 + 0.5 * spread;
       // wide, faint, diffuse haze fanning out behind it
       hazeBand.w[count] = (HAZE_W0 + (HAZE_W1 - HAZE_W0) * spread) * lumps;
-      hazeBand.a[count] = 0.55 * ends * puff * Math.exp(-age / 1100) * smooth(60, 340, age);
+      hazeBand.a[count] = 0.8 * ends * puff * Math.exp(-age / 1300) * smooth(20, 200, age);
       hazeBand.s[count] = 0.62 + 0.38 * spread;
       count++;
     }
@@ -555,7 +567,7 @@ function updateContrails(camPos: THREE.Vector3, pxKm: number, altScale: number) 
       pathPoint(st.path, s, altScale, pts[i], 2.5, st.seed);
       const ends = smooth(0, 0.18, i / (n - 1)) * smooth(1, 0.82, i / (n - 1));
       const gaps = 0.65 + 0.35 * Math.sin(s * 0.11 + st.seed * 3) * Math.sin(s * 0.031 + st.seed);
-      const a = st.alpha * ends * Math.max(0, gaps);
+      const a = Math.min(0.75, st.alpha * 1.35) * ends * Math.max(0, gaps);
       const lumps = 1 + 0.35 * Math.sin(s * 0.05 + st.seed) * Math.sin(s * 0.017 + st.seed * 2);
       coreBand.w[i] = st.coreW * lumps;
       coreBand.a[i] = a * 0.6; // ~30 min old: only a dim remnant of a core left
@@ -569,45 +581,63 @@ function updateContrails(camPos: THREE.Vector3, pxKm: number, altScale: number) 
   }
 }
 
-// ───────────────────────────── the town around you ─────────────────────────────
+// ───────────────────────────── the world around you ─────────────────────────────
+// Everything is anchored in WORLD space (km east / north of HOME), so a barn stays a
+// barn as you walk past it. Countryside props are seeded per 2 km grid cell, so we only
+// rebuild when the observer crosses into a new cell (or in and out of the city).
+const BUILDING_CAP = 700;
+const TREE_CAP = 1300;
 const boxGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
-const buildings = new THREE.InstancedMesh(boxGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), 600);
+const buildings = new THREE.InstancedMesh(boxGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), BUILDING_CAP);
 const treeGeo = new THREE.ConeGeometry(0.5, 1, 7).translate(0, 0.5, 0);
-const trees = new THREE.InstancedMesh(treeGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), 500);
+const trees = new THREE.InstancedMesh(treeGeo, new THREE.MeshLambertMaterial({ color: 0xffffff }), TREE_CAP);
 buildings.frustumCulled = false;
 trees.frustumCulled = false;
 scene.add(buildings, trees);
 
+const CELL = 2; // km per world grid cell
+const CELL_R = 2; // cells generated either side of you (~5 km of scenery, fog ends at 6.5)
+const CITY_R = 10; // km: downtown Indianapolis only gets placed near home
+const CITY_CLEAR = 4.5; // km: the city owns this patch, so no farms sprinkled inside it
+
+const cellSeed = (ci: number, cn: number) => (ci * 73856093) ^ (cn * 19349663) ^ 0x51ed270b;
+
 function rebuildTown() {
   const f = state.obsFrame;
-  const city = Math.hypot(state.obsE, state.obsN) < 8;
-  const r = rng(city ? 7 : 1000 + Math.round(state.obsE / 5) * 31 + Math.round(state.obsN / 5) * 7);
+  const obsE = state.obsE;
+  const obsN = state.obsN;
+  const city = Math.hypot(obsE, obsN) < CITY_R;
   const m = new THREE.Matrix4();
+  const rotM = new THREE.Matrix4();
+  const scl = new THREE.Vector3();
   const basis = new THREE.Matrix4().makeBasis(f.east, f.up, f.north.clone().negate());
-  const p = new THREE.Vector3();
+  const spot = new THREE.Vector3();
+  const dir = new THREE.Vector3();
   const color = new THREE.Color();
   let nb = 0;
   let nt = 0;
-  const window = (az: number) => az > 80 && az < 172; // keep the low sky toward our plane clear
-  const addBox = (azDeg: number, distKm: number, w: number, d: number, h: number, hex: number) => {
-    if (nb >= buildings.count) return;
-    const az = (azDeg * Math.PI) / 180;
-    pointNear(f, Math.sin(az) * distKm, Math.cos(az) * distKm, -0.002, p);
-    m.copy(basis).multiply(new THREE.Matrix4().makeRotationY(r() * Math.PI)).scale(new THREE.Vector3(w, h, d)).setPosition(p);
+  // world offsets (km east / north of HOME) -> a point on the ground there
+  const put = (e: number, n: number, alt: number) => pointAt(dirFromOffset(e, n, dir), alt, spot);
+  const addBox = (r: () => number, e: number, n: number, w: number, d: number, h: number, hex: number) => {
+    if (nb >= BUILDING_CAP) return;
+    put(e, n, -0.002);
+    m.copy(basis).multiply(rotM.makeRotationY(r() * Math.PI)).scale(scl.set(w, h, d)).setPosition(spot);
     buildings.setMatrixAt(nb, m);
     buildings.setColorAt(nb, color.set(hex).offsetHSL(0, 0, (r() - 0.5) * 0.08));
     nb++;
   };
-  const addTree = (azDeg: number, distKm: number, h: number) => {
-    if (nt >= trees.count) return;
-    const az = (azDeg * Math.PI) / 180;
-    pointNear(f, Math.sin(az) * distKm, Math.cos(az) * distKm, -0.001, p);
-    m.copy(basis).scale(new THREE.Vector3(h * 0.55, h, h * 0.55)).setPosition(p);
+  const addTree = (r: () => number, e: number, n: number, h: number) => {
+    if (nt >= TREE_CAP) return;
+    put(e, n, -0.001);
+    m.copy(basis).scale(scl.set(h * 0.55, h, h * 0.55)).setPosition(spot);
     trees.setMatrixAt(nt, m);
     trees.setColorAt(nt, color.set(0x3d6b3a).offsetHSL(0, 0, (r() - 0.5) * 0.1));
     nt++;
   };
   if (city) {
+    // downtown: the same skyline, nailed to the world at HOME
+    const r = rng(7);
+    const window = (az: number) => az > 80 && az < 172; // keep the low sky toward our plane clear (seen from home)
     const clusters = [
       { az: 60, dist: 1.9, spread: 0.7, n: 90, hMin: 0.04, hMax: 0.3 },
       { az: 152, dist: 2.6, spread: 0.6, n: 45, hMin: 0.025, hMax: 0.16 },
@@ -618,42 +648,65 @@ function rebuildTown() {
       for (let i = 0; i < c.n; i++) {
         const ang = r() * Math.PI * 2;
         const rr = Math.sqrt(r()) * c.spread;
-        const de = Math.sin((c.az * Math.PI) / 180) * c.dist + Math.cos(ang) * rr;
-        const dn = Math.cos((c.az * Math.PI) / 180) * c.dist + Math.sin(ang) * rr;
-        const az = (Math.atan2(de, dn) * 180) / Math.PI;
-        const dist = Math.hypot(de, dn);
+        const e = Math.sin((c.az * Math.PI) / 180) * c.dist + Math.cos(ang) * rr;
+        const n = Math.cos((c.az * Math.PI) / 180) * c.dist + Math.sin(ang) * rr;
         const central = 1 - rr / c.spread;
         const h = c.hMin + (c.hMax - c.hMin) * Math.pow(r(), 2.2) * (0.4 + 0.6 * central);
         const w = 0.025 + r() * 0.035;
         const tones = [0x3e4a5e, 0x4b5870, 0x35404f, 0x5d6a80, 0x2f3846];
-        addBox(az, dist, w, w * (0.7 + r() * 0.6), h, tones[Math.floor(r() * tones.length)]);
+        addBox(r, e, n, w, w * (0.7 + r() * 0.6), h, tones[Math.floor(r() * tones.length)]);
       }
     for (let i = 0; i < 260; i++) {
+      // houses near home
       const az = r() * 360;
       const dist = 0.22 + r() * 1.3;
       if (window(((az % 360) + 360) % 360) && dist < 0.9) continue;
-      addBox(az, dist, 0.012 + r() * 0.01, 0.01 + r() * 0.01, 0.005 + r() * 0.004, r() < 0.5 ? 0xa48b74 : 0x8f9aa6);
+      const e = Math.sin((az * Math.PI) / 180) * dist;
+      const n = Math.cos((az * Math.PI) / 180) * dist;
+      addBox(r, e, n, 0.012 + r() * 0.01, 0.01 + r() * 0.01, 0.005 + r() * 0.004, r() < 0.5 ? 0xa48b74 : 0x8f9aa6);
     }
-    for (let i = 0; i < 260; i++) {
+    for (let i = 0; i < 240; i++) {
       const az = r() * 360;
       const dist = 0.05 + r() * 0.5;
       if (window(az) && dist < 0.6) continue;
-      addTree(az, dist, 0.006 + r() * 0.008);
-    }
-  } else {
-    for (let i = 0; i < 40; i++) {
-      const az = r() * 360;
-      const dist = 0.35 + r() * 2.2;
-      const silo = r() < 0.25;
-      addBox(az, dist, silo ? 0.007 : 0.02 + r() * 0.02, silo ? 0.007 : 0.012 + r() * 0.01, silo ? 0.018 + r() * 0.012 : 0.006 + r() * 0.006, silo ? 0xb9bcc0 : r() < 0.5 ? 0x9c3b2e : 0xd9d2c3);
-    }
-    for (let i = 0; i < 420; i++) {
-      // tree lines along fields
-      const az = r() * 360;
-      const dist = 0.4 + r() * 3.2;
-      addTree(az, dist, 0.007 + r() * 0.01);
+      const e = Math.sin((az * Math.PI) / 180) * dist;
+      const n = Math.cos((az * Math.PI) / 180) * dist;
+      addTree(r, e, n, 0.006 + r() * 0.008);
     }
   }
+  // countryside on a fixed world grid: hedgerows, stray trees and the odd farm
+  const ci0 = Math.floor(obsE / CELL);
+  const cn0 = Math.floor(obsN / CELL);
+  for (let ci = ci0 - CELL_R; ci <= ci0 + CELL_R; ci++)
+    for (let cn = cn0 - CELL_R; cn <= cn0 + CELL_R; cn++) {
+      const e0 = ci * CELL;
+      const n0 = cn * CELL;
+      if (city && Math.hypot(e0 + CELL / 2, n0 + CELL / 2) < CITY_CLEAR) continue;
+      const r = rng(cellSeed(ci, cn));
+      for (let k = 0, rows = 2; k < rows; k++) {
+        // a hedgerow walking off in one direction
+        let e = e0 + r() * CELL;
+        let n = n0 + r() * CELL;
+        const de = (r() * 2 - 1) * (0.09 + r() * 0.08);
+        const dn = (r() * 2 - 1) * (0.09 + r() * 0.08);
+        const len = 10 + Math.floor(r() * 8);
+        for (let i = 0; i < len; i++) {
+          addTree(r, e, n, 0.007 + r() * 0.01);
+          e += de;
+          n += dn;
+        }
+      }
+      for (let i = 0, k = 10 + Math.floor(r() * 8); i < k; i++) addTree(r, e0 + r() * CELL, n0 + r() * CELL, 0.007 + r() * 0.01);
+      if (r() < 0.6) {
+        // a farmstead: house, barn, silo
+        const e = e0 + 0.25 + r() * (CELL - 0.5);
+        const n = n0 + 0.25 + r() * (CELL - 0.5);
+        const t = r();
+        addBox(r, e, n, 0.02 + t * 0.02, 0.012 + t * 0.01, 0.006 + t * 0.006, t < 0.5 ? 0x9c3b2e : 0xd9d2c3);
+        if (r() < 0.7) addBox(r, e + 0.06, n + 0.04, 0.007, 0.007, 0.018 + r() * 0.012, 0xb9bcc0);
+        if (r() < 0.6) addBox(r, e - 0.05, n + 0.06, 0.015 + r() * 0.01, 0.01, 0.005 + r() * 0.004, r() < 0.5 ? 0xa48b74 : 0x8f9aa6);
+      }
+    }
   buildings.count = nb;
   trees.count = nt;
   buildings.instanceMatrix.needsUpdate = true;
@@ -661,12 +714,16 @@ function rebuildTown() {
   if (buildings.instanceColor) buildings.instanceColor.needsUpdate = true;
   if (trees.instanceColor) trees.instanceColor.needsUpdate = true;
 }
-// InstancedMesh.count must start at max so capacity exists; rebuildTown lowers it.
-const BUILDING_CAP = 600;
-const TREE_CAP = 500;
-function resetTownCapacity() {
-  buildings.count = BUILDING_CAP;
-  trees.count = TREE_CAP;
+
+// Rebuild the scenery only when you cross into a new grid cell, or in/out of the city.
+let townKey = "";
+function ensureTown() {
+  const k = `${Math.floor(state.obsE / CELL)} ${Math.floor(state.obsN / CELL)} ${
+    Math.hypot(state.obsE, state.obsN) < CITY_R ? "city" : "fields"
+  }`;
+  if (k === townKey) return;
+  townKey = k;
+  rebuildTown();
 }
 
 // ───────────────────────────── globe helpers: you, horizon, sight line, cities ─────────────────────────────
@@ -721,12 +778,14 @@ function setObserver(e: number, n: number) {
   state.obsN = n;
   dirFromOffset(e, n, state.obsDir);
   state.obsFrame = frameAt(state.obsDir);
-  if (surfaceDistance(capCenter, state.obsDir) > 0.3 || capCenter === null) {
+  // The ground cap only needs rebuilding once we have drifted well away from its centre.
+  // While speed-walking we let that drift grow, instead of redoing 27k vertices every frame.
+  const slack = state.mode === "ground" ? Math.min(200, Math.max(0.3, walk.v * 0.6)) : 0.3;
+  if (surfaceDistance(capCenter, state.obsDir) > slack) {
     rebuildCap();
-    capCenter = state.obsDir.clone();
+    capCenter.copy(state.obsDir);
   }
-  resetTownCapacity();
-  rebuildTown();
+  ensureTown();
   const d = Math.hypot(e, n);
   const near = nearestCity(state.obsDir);
   const where =
@@ -841,10 +900,12 @@ function aimAtPlane(instant = true) {
 function enterGlobeFromGround() {
   state.mode = "globe";
   // pick the orbit up from wherever the eye was looking, so the climb out is one continuous move:
-  // same azimuth, and the same look elevation until the drag takes over
+  // same azimuth; the orbit looks DOWN at your spot (pol ~0.85 rad off vertical) so the "You" pin and the
+  // planes stay framed all the way up. The eye->orbit quaternion slerp in placeCamera() carries the tilt
+  // smoothly from looking up at the sky to looking down, so there is no snap here.
   const yr = (state.yaw * Math.PI) / 180;
   state.orbit.az = Math.atan2(-Math.cos(yr), -Math.sin(yr));
-  state.orbit.pol = Math.max(POL_MIN, Math.min(POL_MAX, Math.PI / 2 + (state.pitch * Math.PI) / 180));
+  state.orbit.pol = Math.max(POL_MIN, Math.min(POL_MAX, 0.85));
   syncModeUI();
 }
 function setMode(m: Mode) {
@@ -861,7 +922,11 @@ function syncModeUI() {
   $("mode-ground").setAttribute("aria-selected", String(g));
   $("mode-globe").setAttribute("aria-selected", String(!g));
   document.body.classList.toggle("is-globe", !g);
-  $("hint").textContent = g ? "Drag to look around · pinch or scroll to zoom" : "Drag to spin the world · pinch or scroll to zoom · tap the ground to stand there";
+  $("hint").textContent = g
+    ? "Drag to look around · pinch or scroll to zoom · hold ▲ ▼ (or W/S) to walk, ◀ ▶ (or A/D) to turn"
+    : "Drag to spin the world · pinch or scroll to zoom · tap the ground to stand there";
+  showHint();
+  releaseAllHolds();
 }
 
 // ───────────────────────────── input ─────────────────────────────
@@ -997,6 +1062,164 @@ function hideHint() {
   window.clearTimeout(hintTimer);
   $("hint").classList.add("hidden");
 }
+function showHint() {
+  $("hint").classList.remove("hidden");
+  window.clearTimeout(hintTimer);
+  hintTimer = window.setTimeout(hideHint, 7000);
+}
+
+// ──────────────────────── walking: the D-pad, the keys, the readouts ────────────────────────
+const releasers: (() => void)[] = [];
+/** Press-and-hold button. Pointer capture keeps the hold alive even if the finger slides
+ *  off the button, and nothing about it ever reaches the canvas (so no accidental looking). */
+function holdButton(el: HTMLButtonElement, dir: Pad) {
+  let activeId = -1;  const press = (e: PointerEvent) => {
+    if (activeId >= 0) return;
+    activeId = e.pointerId;
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch {
+      /* synthetic events have no live pointer - the hold still works */
+    }
+    el.classList.add("on");
+    padHeld[dir] = true;
+    hideHint();
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  const release = (e?: PointerEvent) => {
+    if (activeId < 0) return;
+    if (e && e.pointerId !== activeId) return;
+    if (el.hasPointerCapture?.(activeId)) el.releasePointerCapture(activeId);
+    activeId = -1;
+    el.classList.remove("on");
+    padHeld[dir] = false;
+  };
+  el.addEventListener("pointerdown", press);
+  el.addEventListener("pointerup", release);
+  el.addEventListener("pointercancel", release);
+  el.addEventListener("pointerleave", release);
+  el.addEventListener("lostpointercapture", release);
+  el.addEventListener("contextmenu", (e) => e.preventDefault());
+  el.addEventListener("dragstart", (e) => e.preventDefault());
+  releasers.push(() => release());
+}
+/** let go of everything (window lost focus, mode changed, …) */
+function releaseAllHolds() {
+  for (const release of releasers) release();
+  for (const d of ["fwd", "back", "left", "right"] as Pad[]) keyHeld[d] = false;
+}
+holdButton($<HTMLButtonElement>("walk-fwd"), "fwd");
+holdButton($<HTMLButtonElement>("walk-back"), "back");
+holdButton($<HTMLButtonElement>("walk-left"), "left");
+holdButton($<HTMLButtonElement>("walk-right"), "right");
+
+const KEY_DIR: Record<string, Pad> = {
+  ArrowUp: "fwd",
+  KeyW: "fwd",
+  ArrowDown: "back",
+  KeyS: "back",
+  ArrowLeft: "left",
+  KeyA: "left",
+  ArrowRight: "right",
+  KeyD: "right",
+};
+const typingInAField = () => document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement;
+window.addEventListener("keydown", (e) => {
+  // let the arrow keys drive a focused slider (the altitude and 'where are you' rails)
+  if (typingInAField() || e.altKey || e.ctrlKey || e.metaKey) return;
+  const dir = KEY_DIR[e.code];
+  if (!dir || state.mode !== "ground") return;
+  e.preventDefault();
+  if (!keyHeld[dir]) hideHint();
+  keyHeld[dir] = true;
+});
+window.addEventListener("keyup", (e) => {
+  const dir = KEY_DIR[e.code];
+  if (dir) keyHeld[dir] = false;
+});
+window.addEventListener("blur", releaseAllHolds);
+
+const POINTS16 = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+const walkTier = (v: number) =>
+  v < 1 ? "🚶 walking" : v < 4 ? "🏃 running" : v < 12 ? "🚗 driving" : v < 22 ? "✈️ plane-fast" : "🚀 rocket-fast";
+const compassCard = $("compass-card");
+const compassLetters = [...compassCard.querySelectorAll("text")].map((t) => ({
+  el: t,
+  x: Number(t.getAttribute("x") ?? 0),
+  y: Number(t.getAttribute("y") ?? 0),
+}));
+const compassText = $("compass-text");
+const speedPill = $("walk-speed");
+let lastFacing = "";
+let lastSpeedText = "";
+let lastRot = "";
+
+function updateWalkUI() {
+  const yaw = ((state.yaw % 360) + 360) % 360;
+  const rot = yaw.toFixed(1);
+  if (rot !== lastRot) {
+    lastRot = rot;
+    compassCard.setAttribute("transform", `rotate(${-yaw} 0 0)`);
+    // spin the card, but keep the N/E/S/W letters the right way up
+    for (const l of compassLetters) l.el.setAttribute("transform", `rotate(${rot} ${l.x} ${l.y})`);
+  }
+  const facing = POINTS16[Math.round(yaw / 22.5) % 16];
+  if (facing !== lastFacing) {
+    lastFacing = facing;
+    compassText.textContent = `Facing ${facing}`;
+  }
+  const mi = walk.v / KM_PER_MI;
+  const text =
+    walk.v < 0.05
+      ? "🧍 standing still"
+      : `${walkTier(walk.v)} · ${mi < 10 ? mi.toFixed(1) : Math.round(mi)} mi per second`;
+  if (text !== lastSpeedText) {
+    lastSpeedText = text;
+    speedPill.textContent = text;
+    speedPill.classList.toggle("idle", walk.v < 0.05);
+  }
+}
+
+/** Walk in the direction you are facing. Held buttons/keys speed you up over ~5 s. */
+function updateWalk(dt: number) {
+  if (state.mode !== "ground") {
+    walk.v = 0;
+    return;
+  }
+  const dir = (held("fwd") ? 1 : 0) - (held("back") ? 1 : 0);
+  const turn = (held("right") ? 1 : 0) - (held("left") ? 1 : 0);
+  if (turn) {
+    travel = null;
+    setFollow(false); // you are steering now, not the plane
+    state.yaw = (((state.yaw + turn * TURN_RATE * dt) % 360) + 360) % 360;
+  }
+  if (dir === 0) {
+    walk.v = 0;
+  } else {
+    travel = null;
+    walk.v = Math.min(WALK_MAX, Math.max(WALK_MIN, walk.v + WALK_ACCEL * dt));
+    const rad = (state.yaw * Math.PI) / 180;
+    let e = state.obsE + Math.sin(rad) * dir * walk.v * dt;
+    let n = state.obsN + Math.cos(rad) * dir * walk.v * dt;
+    const d = Math.hypot(e, n);
+    if (d > WALK_LIMIT) {
+      const k = WALK_LIMIT / d;
+      e *= k;
+      n *= k;
+      walk.v = 0; // you bumped into the edge of the world
+    }
+    setObserver(e, n);
+  }
+  updateWalkUI();
+}
+
+// keep the D-pad clear of the bottom panel on phones: tell CSS how tall the panel is
+const panelEl = $("panel");
+const syncPanelHeight = () => document.documentElement.style.setProperty("--panel-h", `${panelEl.getBoundingClientRect().height}px`);
+syncPanelHeight();
+if (typeof ResizeObserver !== "undefined") new ResizeObserver(syncPanelHeight).observe(panelEl);
+window.addEventListener("resize", syncPanelHeight);
 
 // ───────────────────────────── camera placement ─────────────────────────────
 const m4 = new THREE.Matrix4();
@@ -1157,6 +1380,8 @@ function frame(now: number) {
     setObserver(travel.fromE + (travel.toE - travel.fromE) * k, travel.fromN + (travel.toN - travel.fromN) * k);
     if (k >= 1) travel = null;
   }
+  // walking around the ground with the D-pad or the keys
+  updateWalk(dt);
   // altitude: whatever the user asked for (slider, marks, wheel, pinch, buttons) is the TARGET; the
   // camera itself eases toward it with frame-rate independent damping, so it always moves smoothly
   {
@@ -1184,6 +1409,11 @@ function frame(now: number) {
   placeCamera();
   const camAlt = camera.position.distanceTo(EARTH_CENTER) - R; // == state.alt (to a few cm in the blend)
   camera.near = Math.max(0.0005, camAlt * 0.05);
+  // up in the air, lift the picture so your spot / the globe sits above the info panel instead of behind it
+  // (fades in with the same eye->orbit blend, so there is no jump leaving the ground)
+  const lift = (1 - state.eyeBlend) * h * 0.16;
+  if (lift > 0.5) camera.setViewOffset(w, h, 0, lift, w, h);
+  else camera.clearViewOffset();
   camera.updateProjectionMatrix();
   camera.updateMatrixWorld();
 

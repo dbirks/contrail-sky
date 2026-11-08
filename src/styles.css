@@ -313,6 +313,137 @@ body.is-globe .globe-only {
   display: inline-flex !important;
 }
 
+/* ── walking around (ground mode only) ── */
+.walk {
+  position: fixed;
+  right: 92px; /* keeps clear of the altitude rail on the right */
+  bottom: max(16px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  pointer-events: none;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  z-index: 4;
+}
+body.is-globe .walk {
+  display: none;
+}
+.walk-info {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.compass {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--glass);
+  border: 1px solid var(--glass-edge);
+  border-radius: 18px;
+  padding: 5px 10px 5px 4px;
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+}
+.compass-dial {
+  width: 52px;
+  height: 52px;
+  flex: none;
+  display: block;
+}
+.compass-ring {
+  fill: rgba(6, 12, 28, 0.6);
+  stroke: rgba(255, 255, 255, 0.22);
+  stroke-width: 2;
+}
+.compass-n {
+  fill: #ff8f9f;
+}
+.compass-p {
+  fill: var(--ink-soft);
+}
+.compass-n,
+.compass-p {
+  font-size: 18px;
+  font-weight: 800;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+.compass-eye {
+  fill: var(--sun);
+}
+.compass-text {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.15;
+  max-width: 60px;
+}
+.speed-pill {
+  background: var(--glass);
+  border: 1px solid var(--glass-edge);
+  border-radius: 999px;
+  padding: 7px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  backdrop-filter: blur(10px);
+}
+.speed-pill.idle {
+  opacity: 0.55;
+}
+.dpad {
+  --btn: 66px;
+  display: grid;
+  grid-template-columns: repeat(3, var(--btn));
+  grid-template-rows: repeat(2, var(--btn));
+  gap: 8px;
+}
+.dpad-btn {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--glass-edge);
+  background: var(--glass);
+  backdrop-filter: blur(10px);
+  color: var(--ink);
+  border-radius: 18px;
+  font-size: 26px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.dpad-btn.fwd {
+  grid-column: 2;
+  grid-row: 1;
+}
+.dpad-btn.left {
+  grid-column: 1;
+  grid-row: 2;
+}
+.dpad-btn.back {
+  grid-column: 2;
+  grid-row: 2;
+}
+.dpad-btn.right {
+  grid-column: 3;
+  grid-row: 2;
+}
+.dpad-btn.on {
+  background: rgba(90, 162, 255, 0.55);
+  border-color: var(--sun);
+  transform: scale(0.95);
+}
+
 /* ── labels in the scene ── */
 #labels {
   position: fixed;
@@ -456,7 +587,13 @@ body.is-globe .globe-only {
     font-size: 13px;
   }
   .hint {
-    top: 46%;
+    /* keep the hint out of the way of the D-pad: tuck it under the top bar */
+    top: 62px;
+    left: 8px;
+    transform: none;
+    max-width: 296px;
+    white-space: normal;
+    text-align: center;
   }
   .brand p,
   .where-scale {
@@ -483,5 +620,36 @@ body.is-globe .globe-only {
   .buttons {
     margin-top: 6px;
     gap: 6px;
+  }
+  .walk {
+    /* phones: the contrails sit low, just above the full-width panel, so park the pad in the
+       empty upper-left sky under the title instead of over the horizon */
+    left: 16px;
+    right: auto;
+    top: calc(max(12px, env(safe-area-inset-top)) + 128px); /* below the hint bubble */
+    bottom: auto;
+    align-items: flex-start;
+  }
+  .walk-info {
+    justify-content: flex-start;
+  }
+  .dpad {
+    --btn: 54px;
+    gap: 6px;
+  }
+  .dpad-btn {
+    font-size: 21px;
+    border-radius: 15px;
+  }
+  .compass-text {
+    display: none;
+  }
+  .compass-dial {
+    width: 46px;
+    height: 46px;
+  }
+  .speed-pill {
+    font-size: 12px;
+    padding: 5px 10px;
   }
 }
