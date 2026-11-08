@@ -971,9 +971,12 @@ canvas.addEventListener("pointermove", (e) => {
   }
 });
 const endPointer = (e: PointerEvent) => {
-  if (downAt && pointers.size === 1 && state.mode === "globe") {
+  if (downAt && pointers.size === 1) {
     const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
-    if (moved < 6 && performance.now() - downAt.t < 450) tapGlobe(e.clientX, e.clientY);
+    const quick = performance.now() - downAt.t < 450;
+    if (moved < 6 && quick && state.mode === "globe") tapGlobe(e.clientX, e.clientY);
+    // on phones, a light tap on the sky folds the open sheet back into its pill so it stops covering the sky
+    if (moved < 12 && quick && sheetIsSmall.matches && panelEl.classList.contains("sheet-open")) setSheet(false);
   }
   pointers.delete(e.pointerId);
   if (pointers.size < 2) pinchDist = 0;
@@ -1221,6 +1224,44 @@ syncPanelHeight();
 if (typeof ResizeObserver !== "undefined") new ResizeObserver(syncPanelHeight).observe(panelEl);
 window.addEventListener("resize", syncPanelHeight);
 
+// ─────────────────── the panel as a bottom sheet (phones) ───────────────────
+// Small screens: the panel lives shut as a one-line pill at the bottom; tap it and it opens into a
+// bottom sheet you can scroll. Big screens keep the card as it was, with the old #panel-toggle.
+const sheetPill = $<HTMLButtonElement>("readout-mini");
+const sheetMiniText = $("readout-mini-text");
+const sheetIsSmall = window.matchMedia("(max-width: 640px), (max-height: 500px)");
+let desktopCollapsed = false; // remembers how the desktop card was left, for when we rotate back out
+function setSheet(open: boolean) {
+  panelEl.classList.toggle("sheet-open", open);
+  document.body.classList.toggle("sheet-open", open); // a hook for the other phone UI (D-pad, rail) if it wants to step aside
+  sheetPill.setAttribute("aria-expanded", String(open));
+  requestAnimationFrame(syncPanelHeight); // --panel-h follows the sheet as it grows
+}
+/** the pill doubles as the grab handle: tap it shut, tap it open again */
+sheetPill.addEventListener("click", () => setSheet(!panelEl.classList.contains("sheet-open")));
+/** crossing the breakpoint resets to that size's starting point: a shut pill on a phone, the card on a desktop */
+function fitSheetToScreen() {
+  if (sheetIsSmall.matches) {
+    desktopCollapsed = panelEl.classList.contains("collapsed");
+    panelEl.classList.remove("collapsed");
+    setSheet(false);
+  } else {
+    panelEl.classList.remove("sheet-open");
+    document.body.classList.remove("sheet-open");
+    panelEl.classList.toggle("collapsed", desktopCollapsed);
+  }
+}
+fitSheetToScreen();
+sheetIsSmall.addEventListener("change", fitSheetToScreen);
+
+let lastMini = "";
+/** the short headline shown on the shut pill, e.g. "✈ 4.6° above your horizon · 76 mi away" */
+function setMini(text: string) {
+  if (text === lastMini) return;
+  lastMini = text;
+  sheetMiniText.textContent = text;
+}
+
 // ───────────────────────────── camera placement ─────────────────────────────
 const m4 = new THREE.Matrix4();
 const camTarget = new THREE.Vector3();
@@ -1345,6 +1386,7 @@ function updateReadout() {
     factsEl.textContent = "Its contrail is slowly spreading out and fading.";
     sentEl.textContent = "A new plane will come along in a moment!";
     $("gauge-needle").setAttribute("transform", "rotate(0 50 52)");
+    setMini(`✈ ${f.name} flew away`);
     return;
   }
   const v = f.realPos.clone().sub(eye);
@@ -1355,6 +1397,11 @@ function updateReadout() {
   angleEl.textContent =
     el < 0 ? `${f.name} is hidden below your horizon` : `${f.name} looks ${el < 10 ? el.toFixed(1) : Math.round(el)}° above your horizon`;
   factsEl.innerHTML = `<b>${fmtMi(altKm)} mi</b> (${fmtKm(altKm)} km) up · <b>${fmtMi(ground)} mi</b> (${fmtKm(ground)} km) away`;
+  setMini(
+    el < 0
+      ? `✈ ${f.name} hidden below the horizon`
+      : `✈ ${el < 10 ? el.toFixed(1) : Math.round(el)}° above your horizon · ${fmtMi(ground)} mi away`,
+  );
   let s: string;
   if (el < 0) s = "The Earth curves away, so the ground is in the way. But the plane is still way up high!";
   else if (el < 12)

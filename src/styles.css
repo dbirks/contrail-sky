@@ -653,3 +653,217 @@ body.is-globe .walk {
     padding: 5px 10px;
   }
 }
+
+/* ==== mobile bottom sheet (pi-sheet) ==== */
+/* On small screens the info panel folds into a one-line pill at the bottom of the sky so the
+   horizon (where the contrails are) stays clear. Tap the pill -> it opens as a bottom sheet with
+   everything in it, scrollable inside. All the new elements are invented here, and the sheet
+   wrappers dissolve on desktop, so the desktop card is exactly as it was. */
+.sheet-pill,
+.sheet-grip {
+  display: none;
+}
+.sheet-body,
+.sheet-inner {
+  display: contents;
+}
+
+@media (max-width: 640px), (max-height: 500px) {
+  .panel {
+    position: fixed;
+    z-index: 5; /* a bottom sheet sits on top of the other phone chrome, so its handle is always tappable */
+    left: max(12px, env(safe-area-inset-left));
+    right: max(12px, env(safe-area-inset-right));
+    width: auto;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    max-height: min(60dvh, calc(100dvh - 110px));
+    padding: 0;
+    gap: 0;
+    border-radius: 24px; /* 48px tall pill when shut, ordinary rounded card when open */
+    overflow: hidden;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  }
+  /* the desktop ▾ is replaced by the grab handle below */
+  .panel-toggle {
+    display: none;
+  }
+
+  /* ── shut: one slim line, tap anywhere to open ── */
+  .sheet-pill {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    position: relative;
+    width: 100%;
+    min-height: 48px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--ink);
+    font-size: 13.5px;
+    font-weight: 700;
+    text-align: left;
+  }
+  .sheet-pill:active {
+    background: rgba(255, 255, 255, 0.07);
+  }
+  .sheet-pill-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .sheet-pill-chev {
+    flex: none;
+    font-size: 11px;
+    color: var(--sun);
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* ── open: the same bar becomes the grab handle, ▼ (the ▲ turned upside down) shuts it ── */
+  .panel.sheet-open .sheet-pill {
+    min-height: 44px;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .panel.sheet-open .sheet-pill-text {
+    display: none;
+  }
+  .panel.sheet-open .sheet-pill-chev {
+    position: absolute;
+    right: 10px;
+    transform: rotate(180deg);
+  }
+  .sheet-grip {
+    display: none;
+    flex: none;
+    width: 46px;
+    height: 5px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.4);
+  }
+  .panel.sheet-open .sheet-grip {
+    display: block;
+  }
+
+  /* the sheet folds open with a height (+ slight rise) transition; on phones this is the smooth
+     way in and out, and the panel's own max-height caps it at ~60dvh with the content scrolling */
+  .panel .sheet-body {
+    display: block;
+    min-height: 0;
+    max-height: 0;
+    overflow: hidden;
+    padding: 0 12px;
+    translate: 0 10px;
+    opacity: 0.4;
+    visibility: hidden;
+    transition:
+      max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+      padding 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+      translate 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+      opacity 0.2s linear,
+      visibility 0s linear 0.3s;
+  }
+  .panel.sheet-open .sheet-body {
+    /* everything the sheet may take, minus the 44px handle and the border */
+    max-height: calc(min(60dvh, 100dvh - 110px) - 46px);
+    overflow: hidden auto;
+    overscroll-behavior: contain; /* scrolling the sheet never drags the page/Safari along with it */
+    padding: 11px 12px 12px;
+    translate: 0 0;
+    opacity: 1;
+    visibility: visible;
+    transition:
+      max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+      padding 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+      translate 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+      opacity 0.2s linear,
+      visibility 0s;
+  }
+
+  .panel .sheet-inner {
+    display: block; /* the scroller is .sheet-body above; this is just its content */
+  }
+
+  /* ── a tighter fit inside the sheet ── */
+  .readout {
+    gap: 10px;
+    padding-right: 0;
+    align-items: center;
+  }
+  .gauge {
+    width: 58px;
+  }
+  .readout-angle {
+    font-size: 14.5px;
+  }
+  .readout-facts {
+    font-size: 13px;
+    margin-top: 1px;
+  }
+  .readout-sentence {
+    font-size: 13px;
+    margin-top: 5px;
+  }
+  #east-slider {
+    margin: 4px 0 0;
+    min-height: 44px; /* a comfortable strip to grab with a thumb */
+  }
+  .where-label {
+    font-size: 13px;
+    min-height: 30px;
+    align-items: center;
+  }
+  .where-scale {
+    display: flex; /* the old phone rule hid these; they fit again at this size */
+    font-size: 10px;
+  }
+  .buttons {
+    margin-top: 8px;
+    gap: 8px;
+  }
+  .buttons button {
+    flex: 1 1 42%;
+    min-height: 44px;
+    padding: 6px 10px;
+    font-size: 13px;
+    border-radius: 14px;
+  }
+  .options {
+    margin-top: 8px;
+    gap: 2px 12px;
+    font-size: 13px;
+  }
+  .options label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 44px;
+  }
+  .options input {
+    width: 18px;
+    height: 18px;
+    flex: none;
+  }
+  .speed {
+    margin-left: auto;
+  }
+  .speed button {
+    min-height: 44px;
+    padding: 0 14px;
+    font-size: 13px;
+  }
+
+  /* anyone who asked for less motion gets an instant fold instead */
+  @media (prefers-reduced-motion: reduce) {
+    .panel .sheet-body,
+    .panel.sheet-open .sheet-body {
+      transition-duration: 1ms;
+    }
+    .sheet-pill-chev {
+      transition: none;
+    }
+  }
+}
