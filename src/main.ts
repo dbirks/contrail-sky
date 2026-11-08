@@ -220,43 +220,71 @@ scene.add(sky);
 }
 
 // ───────────────────────────── contrails ─────────────────────────────
-function softTexture(): THREE.Texture {
-  const c = document.createElement("canvas");
-  c.width = 4;
-  c.height = 64;
-  const g = c.getContext("2d")!;
-  for (let y = 0; y < 64; y++) {
-    const v = (y + 0.5) / 64 - 0.5;
-    const a = Math.exp(-(v * v) / 0.045);
-    g.fillStyle = `rgba(255,255,255,1)`;
-    g.globalAlpha = 1;
-    const k = Math.round(a * 255);
-    g.fillStyle = `rgb(${k},${k},${k})`;
-    g.fillRect(0, y, 4, 1);
-  }
-  return new THREE.CanvasTexture(c);
+/** Every contrail ribbon shares one material. Instead of a fixed alphaMap we compute the
+ *  alpha profile across the ribbon width in the fragment shader, driven by a per-vertex
+ *  "softness": 0 = fresh exhaust streak (crisp, with a hint of the two engine lobes),
+ *  1 = old ice-crystal haze (wide, puffy, feathered edges). That way one ribbon can be
+ *  sharp at the plane and diffuse 20 minutes behind it without extra geometry. */
+function makeContrailMaterial(): THREE.MeshBasicMaterial {
+  const mat = new THREE.MeshBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    fog: false,
+  });
+  mat.onBeforeCompile = (shader) => {
+    shader.vertexShader =
+      /* glsl */ `
+        attribute vec2 aProfile; // x: -1..1 across the ribbon, y: 0 crisp .. 1 diffuse
+        varying vec2 vProfile;
+      ` +
+      shader.vertexShader.replace("void main() {", "void main() {\n\tvProfile = aProfile;");
+    shader.fragmentShader =
+      /* glsl */ `
+        varying vec2 vProfile;
+        float contrailProfile() {
+          float d = clamp( abs( vProfile.x ), 0.0, 1.0 );   // 0 middle .. 1 edge
+          float s = clamp( vProfile.y, 0.0, 1.0 );          // 0 crisp .. 1 diffuse
+          float taper = max( 1.0 - d * d, 0.0 );            // always fades out exactly at the edge
+          float narrow = pow( taper, 7.0 );                 // tight, bright core
+          float puffy = pow( taper, 1.35 );                 // broad, soft, low contrast
+          float o = ( d - 0.34 ) * 4.6;                     // twin engine streaks
+          float pair = max( exp( -o * o ) * taper, 0.5 * narrow );
+          float wPair = max( 0.0, 1.0 - s * 6.0 );
+          float wNarrow = max( 0.0, 1.0 - abs( s - 0.35 ) * 3.0 );
+          float wPuffy = smoothstep( 0.2, 1.0, s );
+          return ( wPair * pair + wNarrow * narrow + wPuffy * puffy ) / ( wPair + wNarrow + wPuffy + 1e-4 );
+        }
+      ` +
+      shader.fragmentShader.replace(
+        "#include <color_fragment>",
+        "#include <color_fragment>\n\t\tdiffuseColor.a *= contrailProfile();",
+      );
+  };
+  return mat;
 }
-const contrailMat = new THREE.MeshBasicMaterial({
-  vertexColors: true,
-  transparent: true,
-  depthWrite: false,
-  side: THREE.DoubleSide,
-  fog: false,
-  alphaMap: softTexture(),
-});
+const contrailMat = makeContrailMaterial();
+
+/** Thinnest a trail is ever allowed to look on screen, in pixels. A real contrail is far
+ *  under a pixel wide from the ground, so without a floor it simply disappears. */
+const MIN_PX_CORE = { ground: 4.5, globe: 3 };
+const MIN_PX_HAZE = { ground: 14, globe: 6 };
 
 class Ribbon {
   readonly mesh: THREE.Mesh;
+  private geo = new THREE.BufferGeometry();
   private pos: THREE.BufferAttribute;
   private col: THREE.BufferAttribute;
-  private geo = new THREE.BufferGeometry();
-  constructor(readonly n: number) {
+  private prof: THREE.BufferAttribute;
+  constructor(readonly n: number, order: number) {
     this.pos = new THREE.BufferAttribute(new Float32Array(n * 6), 3);
     this.col = new THREE.BufferAttribute(new Float32Array(n * 8), 4);
-    const uv = new Float32Array(n * 4);
+    this.prof = new THREE.BufferAttribute(new Float32Array(n * 4), 2);
     const idx: number[] = [];
     for (let i = 0; i < n; i++) {
-      uv.set([i / (n - 1), 0, i / (n - 1), 1], i * 4);
+      this.prof.setXY(i * 2, -1, 0);
+      this.prof.setXY(i * 2 + 1, 1, 0);
       if (i < n - 1) {
         const a = i * 2;
         idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
@@ -264,19 +292,30 @@ class Ribbon {
     }
     this.pos.setUsage(THREE.DynamicDrawUsage);
     this.col.setUsage(THREE.DynamicDrawUsage);
+    this.prof.setUsage(THREE.DynamicDrawUsage);
     this.geo.setAttribute("position", this.pos);
     this.geo.setAttribute("color", this.col);
-    this.geo.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+    this.geo.setAttribute("aProfile", this.prof);
     this.geo.setIndex(idx);
     this.mesh = new THREE.Mesh(this.geo, contrailMat);
     this.mesh.frustumCulled = false;
+    // the wide faint layer of a trail is drawn just before its bright core
+    this.mesh.renderOrder = order;
     scene.add(this.mesh);
   }
   private side = new THREE.Vector3();
   private tan = new THREE.Vector3();
   private toCam = new THREE.Vector3();
-  update(pts: THREE.Vector3[], widths: number[], alphas: number[], count: number, camPos: THREE.Vector3, pxKm: number) {
-    const minPx = state.mode === "ground" ? 2.2 : 3;
+  update(
+    pts: THREE.Vector3[],
+    widths: number[],
+    alphas: number[],
+    softs: number[],
+    count: number,
+    camPos: THREE.Vector3,
+    pxKm: number,
+    minPx: number,
+  ) {
     if (count < 2) {
       this.geo.setDrawRange(0, 0);
       return;
@@ -289,17 +328,21 @@ class Ribbon {
       this.toCam.subVectors(camPos, p);
       const dist = this.toCam.length();
       this.side.crossVectors(this.tan, this.toCam).normalize();
-      const w = Math.max(widths[i], minPx * dist * pxKm) * 0.5;
+      const floor = minPx * dist * pxKm;
+      const w = Math.max(widths[i], floor) * 0.5;
       // keep apparent brightness roughly constant when we widen a too-thin trail
-      const thin = Math.min(1, widths[i] / Math.max(1e-6, minPx * dist * pxKm));
+      const thin = Math.min(1, widths[i] / Math.max(1e-6, floor));
       const alpha = alphas[i] * (0.7 + 0.3 * thin);
       this.pos.setXYZ(i * 2, p.x + this.side.x * w, p.y + this.side.y * w, p.z + this.side.z * w);
       this.pos.setXYZ(i * 2 + 1, p.x - this.side.x * w, p.y - this.side.y * w, p.z - this.side.z * w);
       this.col.setXYZW(i * 2, 1, 1, 1, alpha);
       this.col.setXYZW(i * 2 + 1, 1, 1, 1, alpha);
+      this.prof.setXY(i * 2, -1, softs[i]);
+      this.prof.setXY(i * 2 + 1, 1, softs[i]);
     }
     this.pos.needsUpdate = true;
     this.col.needsUpdate = true;
+    this.prof.needsUpdate = true;
     this.geo.setDrawRange(0, (count - 1) * 6);
   }
 }
@@ -354,7 +397,8 @@ type Flight = {
   name: string;
   path: Path;
   s: number;
-  ribbon: Ribbon;
+  core: Ribbon; // bright, narrow, young part of the trail
+  haze: Ribbon; // wide, faint, spread-out trail behind it
   plane: THREE.Group;
   label: HTMLElement;
   pos: THREE.Vector3; // render position (stretched in globe mode)
@@ -391,7 +435,8 @@ const flights: Flight[] = flightDefs.map((d, i) => {
     name: d.name,
     path: d.path,
     s: d.s0,
-    ribbon: new Ribbon(SAMPLES),
+    core: new Ribbon(SAMPLES, 10 + i * 2 + 1),
+    haze: new Ribbon(SAMPLES, 10 + i * 2),
     plane: makePlaneModel(),
     label,
     pos: new THREE.Vector3(),
@@ -404,25 +449,49 @@ function updateLabelClasses() {
 }
 updateLabelClasses();
 
+/** Old, mostly-vanished trails hanging in the sky: wide soft bands with gaps in them. */
 const staticDefs = [
-  { path: { a: [90, 150], b: [-110, 205], alt: 11.2 } as Path, width: 2.4, alpha: 0.42, seed: 1.3 },
-  { path: { a: [-230, -20], b: [-80, -170], alt: 10.1 } as Path, width: 1.8, alpha: 0.36, seed: 4.1 },
-  { path: { a: [120, -95], b: [215, 60], alt: 11.8 } as Path, width: 3.0, alpha: 0.3, seed: 2.7 },
-  { path: { a: [-40, 260], b: [-300, 60], alt: 10.6 } as Path, width: 2.0, alpha: 0.32, seed: 5.5 },
+  { path: { a: [90, 150], b: [-110, 205], alt: 11.2 } as Path, coreW: 0.85, hazeW: 3.2, soft: 0.72, alpha: 0.44, seed: 1.3 },
+  { path: { a: [-230, -20], b: [-80, -170], alt: 10.1 } as Path, coreW: 0.6, hazeW: 2.5, soft: 0.82, alpha: 0.4, seed: 4.1 },
+  { path: { a: [120, -95], b: [215, 60], alt: 11.8 } as Path, coreW: 1.1, hazeW: 4.0, soft: 0.66, alpha: 0.36, seed: 2.7 },
+  { path: { a: [-40, 260], b: [-300, 60], alt: 10.6 } as Path, coreW: 0.7, hazeW: 3.0, soft: 0.88, alpha: 0.38, seed: 5.5 },
 ];
-const statics = staticDefs.map((d) => ({ ...d, ribbon: new Ribbon(140) }));
+const statics = staticDefs.map((d, i) => ({
+  ...d,
+  // drawn before the live flights, so a wide faint band never washes out a fresh bright core
+  core: new Ribbon(140, i * 2 + 1),
+  haze: new Ribbon(140, i * 2),
+}));
 
 const pts: THREE.Vector3[] = Array.from({ length: SAMPLES }, () => new THREE.Vector3());
-const widths = new Array<number>(SAMPLES).fill(0);
-const alphas = new Array<number>(SAMPLES).fill(0);
+/** Per-sample ribbon parameters, filled in by updateContrails and handed to Ribbon.update. */
+type Band = { w: number[]; a: number[]; s: number[] };
+const makeBand = (): Band => ({
+  w: new Array<number>(SAMPLES).fill(0),
+  a: new Array<number>(SAMPLES).fill(0),
+  s: new Array<number>(SAMPLES).fill(0),
+});
+const coreBand = makeBand();
+const hazeBand = makeBand();
 const smooth = (a: number, b: number, x: number) => {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
   return t * t * (3 - 2 * t);
 };
 
+// Real contrails spread from ~0.1 km wide to 2-4 km over 10-25 minutes. The haze layer follows
+// roughly that curve (a little exaggerated) so the trail visibly fattens behind the plane.
+const SPREAD_TAU = 520; // seconds
+const CORE_W0 = 0.14; // km, right behind the engines
+const CORE_W1 = 1.3; // km, ~20 min later
+const HAZE_W0 = 0.22;
+const HAZE_W1 = 3.6;
+
 function updateContrails(camPos: THREE.Vector3, pxKm: number, altScale: number) {
   const tmpA = new THREE.Vector3();
   const tmpB = new THREE.Vector3();
+  const onGround = state.mode === "ground";
+  const corePx = onGround ? MIN_PX_CORE.ground : MIN_PX_CORE.globe;
+  const hazePx = onGround ? MIN_PX_HAZE.ground : MIN_PX_HAZE.globe;
   for (const f of flights) {
     const L = pathLen(f.path);
     const head = Math.min(f.s, L);
@@ -437,12 +506,22 @@ function updateContrails(camPos: THREE.Vector3, pxKm: number, altScale: number) 
       const s = head - (head - tail) * u * u;
       const age = (f.s - s) / SPEED_KM_S;
       pathPoint(f.path, s, altScale, pts[count]);
-      widths[count] = 0.03 + 1.5 * (1 - Math.exp(-age / 650));
-      const puff = 0.82 + 0.18 * Math.sin(s * 0.9 + f.path.alt * 7) * Math.sin(s * 0.23);
-      alphas[count] = 0.95 * Math.exp(-age / 800) * smooth(0, 3, age) * smooth(0, 12, s) * puff * smooth(MAX_AGE_S, MAX_AGE_S * 0.75, age);
+      const spread = 1 - Math.exp(-age / SPREAD_TAU); // 0 .. ~0.94 over the trail's whole life
+      const puff = 0.85 + 0.15 * Math.sin(s * 0.9 + f.path.alt * 7) * Math.sin(s * 0.23);
+      const lumps = 1 + 0.2 * Math.sin(s * 0.045 + f.path.alt * 3) * Math.sin(s * 0.013);
+      const ends = smooth(0, 3, age) * smooth(0, 12, s) * smooth(MAX_AGE_S, MAX_AGE_S * 0.75, age);
+      // bright, crisp, still-narrow young trail
+      coreBand.w[count] = (CORE_W0 + (CORE_W1 - CORE_W0) * spread) * lumps;
+      coreBand.a[count] = ends * puff * Math.exp(-age / 900);
+      coreBand.s[count] = 0.04 + 0.5 * spread;
+      // wide, faint, diffuse haze fanning out behind it
+      hazeBand.w[count] = (HAZE_W0 + (HAZE_W1 - HAZE_W0) * spread) * lumps;
+      hazeBand.a[count] = 0.55 * ends * puff * Math.exp(-age / 1100) * smooth(60, 340, age);
+      hazeBand.s[count] = 0.62 + 0.38 * spread;
       count++;
     }
-    f.ribbon.update(pts, widths, alphas, count, camPos, pxKm);
+    f.core.update(pts, coreBand.w, coreBand.a, coreBand.s, count, camPos, pxKm, corePx);
+    f.haze.update(pts, hazeBand.w, hazeBand.a, hazeBand.s, count, camPos, pxKm, hazePx);
     f.visible = f.s <= L;
     pathPoint(f.path, head, altScale, f.pos);
     pathPoint(f.path, head, 1, f.realPos);
@@ -462,16 +541,23 @@ function updateContrails(camPos: THREE.Vector3, pxKm: number, altScale: number) 
   }
   for (const st of statics) {
     const L = pathLen(st.path);
-    const n = st.ribbon.n;
+    const n = st.core.n;
     for (let i = 0; i < n; i++) {
       const s = (i / (n - 1)) * L;
       pathPoint(st.path, s, altScale, pts[i], 2.5, st.seed);
-      widths[i] = st.width * (0.8 + 0.4 * Math.sin(s * 0.05 + st.seed));
       const ends = smooth(0, 0.18, i / (n - 1)) * smooth(1, 0.82, i / (n - 1));
       const gaps = 0.65 + 0.35 * Math.sin(s * 0.11 + st.seed * 3) * Math.sin(s * 0.031 + st.seed);
-      alphas[i] = st.alpha * ends * Math.max(0, gaps);
+      const a = st.alpha * ends * Math.max(0, gaps);
+      const lumps = 1 + 0.35 * Math.sin(s * 0.05 + st.seed) * Math.sin(s * 0.017 + st.seed * 2);
+      coreBand.w[i] = st.coreW * lumps;
+      coreBand.a[i] = a * 0.6; // ~30 min old: only a dim remnant of a core left
+      coreBand.s[i] = st.soft;
+      hazeBand.w[i] = st.hazeW * lumps; // wide, soft, broken into bands by the gaps
+      hazeBand.a[i] = a;
+      hazeBand.s[i] = 1;
     }
-    st.ribbon.update(pts, widths, alphas, n, camPos, pxKm);
+    st.core.update(pts, coreBand.w, coreBand.a, coreBand.s, n, camPos, pxKm, corePx);
+    st.haze.update(pts, hazeBand.w, hazeBand.a, hazeBand.s, n, camPos, pxKm, hazePx);
   }
 }
 
