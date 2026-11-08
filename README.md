@@ -42,6 +42,12 @@ to it, it is simply up, up, up.
 
 Back on the **Home** side, **Find the plane** aims your view at the best example so you can compare.
 
+## Live site
+
+**https://dbirks.github.io/contrail-sky/** — built and published by
+[`.github/workflows/pages.yaml`](.github/workflows/pages.yaml) on every push to `main`
+(the Pages build sets `BASE_PATH=/contrail-sky/`; other builds use relative paths).
+
 ## Running it
 
 Requires [node 24](https://nodejs.org) and [pnpm](https://pnpm.io) 10 (`corepack enable`).

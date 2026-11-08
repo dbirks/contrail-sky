@@ -89,7 +89,7 @@ const held = (d: Pad) => padHeld[d] || keyHeld[d];
 
 // ───────────────────────────── Earth ─────────────────────────────
 const earthMat = new THREE.MeshBasicMaterial({ color: 0x4d7a5a });
-new THREE.TextureLoader().load("textures/earth-day-4096.jpg", (tex) => {
+new THREE.TextureLoader().load(`${import.meta.env.BASE_URL}textures/earth-day-4096.jpg`, (tex) => {
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
   earthMat.map = tex;
